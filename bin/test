@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cargo test --locked -j 2
+cargo clippy --locked --all-targets -- -D warnings

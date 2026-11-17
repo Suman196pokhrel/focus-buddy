@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Focus Buddy
+Comment=Local webcam focus reminders
+Exec=focus-buddy
+Icon=focus-buddy
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=dev.focusbuddy.FocusBuddy

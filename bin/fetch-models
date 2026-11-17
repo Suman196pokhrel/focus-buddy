@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/../models" && pwd)"
+fetch() {
+    name="$1" checksum="$2" url="$3"
+    if test -f "$name" && printf '%s  %s\n' "$checksum" "$name" | sha256sum --check --status; then
+        printf '%s already verified\n' "$name"
+        return
+    fi
+    partial="$name.part"
+    trap 'rm -f -- "$partial"' EXIT HUP INT TERM
+    curl --fail --location --retry 2 "$url" --output "$partial"
+    printf '%s  %s\n' "$checksum" "$partial" | sha256sum --check --status
+    mv -- "$partial" "$name"
+    trap - EXIT HUP INT TERM
+}
+fetch yunet.onnx ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0 https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/face_detection_yunet_2026may.onnx
+fetch landmarks.onnx e848578c7ac2474b35e0c4b9a1498ff4145c525552b3d845bdb1f66c8a9d85c2 https://media.githubusercontent.com/media/yinguobing/head-pose-estimation/e0c37703e31807e49ab46d919cd010a7809b2300/assets/face_landmarks.onnx
