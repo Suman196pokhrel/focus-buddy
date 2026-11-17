@@ -2,7 +2,8 @@ use crate::{
     audio::Audio,
     camera::{self, Worker},
     focus::{self, AlertGate, Attention, Features, NAMES, Zone},
-    settings::{self, Settings},
+    settings::{self, Settings, SoundSite},
+    tray::{Command, TrayIcon},
 };
 use gtk::{gdk, gio, glib, prelude::*};
 use std::{
@@ -53,6 +54,46 @@ impl State {
             std::fs::write(&path, include_bytes!("../assets/nudge.wav"))?;
         }
         Ok(path)
+    }
+}
+fn rebuild_sound_sites(list: &gtk::Box, state: &Rc<RefCell<State>>, notice: &gtk::Label) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    for (index, site) in state
+        .borrow()
+        .settings
+        .sound_sites
+        .clone()
+        .into_iter()
+        .enumerate()
+    {
+        let website = row(8);
+        let link = gtk::LinkButton::with_label(&site.url, &site.label);
+        link.set_tooltip_text(Some(&site.url));
+        link.set_hexpand(true);
+        link.set_halign(gtk::Align::Start);
+        website.append(&link);
+        let remove = gtk::Button::from_icon_name("user-trash-symbolic");
+        remove.set_tooltip_text(Some(&format!("Remove {}", site.label)));
+        website.append(&remove);
+        remove.connect_clicked({
+            let (state, notice, list) = (state.clone(), notice.clone(), list.downgrade());
+            move |_| {
+                let mut state_ref = state.borrow_mut();
+                if index >= state_ref.settings.sound_sites.len() {
+                    return;
+                }
+                state_ref.settings.sound_sites.remove(index);
+                let result = state_ref.save();
+                drop(state_ref);
+                feedback(&notice, result, "Website link removed.");
+                if let Some(list) = list.upgrade() {
+                    rebuild_sound_sites(&list, &state, &notice);
+                }
+            }
+        });
+        list.append(&website);
     }
 }
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -119,7 +160,7 @@ pub fn launch(smoke: bool) -> glib::ExitCode {
         .application_id("dev.focusbuddy.FocusBuddy")
         .build();
     app.connect_activate(move |app| {
-        if let Some(window) = app.active_window() {
+        if let Some(window) = app.windows().first() {
             window.present();
             return;
         }
@@ -177,9 +218,18 @@ fn build(app: &gtk::Application, smoke: bool) {
     let start = gtk::Button::with_label("Start session");
     start.add_css_class("primary");
     heading.append(&start);
-    let background = gtk::Button::with_label("Minimize");
-    background.set_tooltip_text(Some("Keep monitoring while the window is minimized"));
+    let background = gtk::Button::with_label("Hide to tray");
+    background.set_tooltip_text(Some(
+        "Keep the session running; reopen from the tray or app launcher",
+    ));
     heading.append(&background);
+    let quit = gtk::Button::with_label("Quit");
+    quit.set_tooltip_text(Some("Stop monitoring and exit Focus Buddy"));
+    heading.append(&quit);
+    quit.connect_clicked({
+        let app = app.clone();
+        move |_| app.quit()
+    });
     root.append(&heading);
     let body = row(20);
     let left = column(16);
@@ -226,6 +276,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Contain);
     picture.add_css_class("preview");
+    picture.set_visible(false);
     preview_card.append(&picture);
     let preview_toggle = gtk::CheckButton::with_label("Show camera preview");
     preview_card.append(&preview_toggle);
@@ -237,6 +288,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     let calibration = card("03   LEARN YOUR DESK");
     calibration.append(&label("Start the camera, then calibrate each position. You get 2 seconds to look at the target, followed by 4 seconds of samples.","muted"));
     let mut zone_buttons = Vec::new();
+    let mut notebook_row = None;
     for (i, name) in NAMES.iter().enumerate() {
         let zone_row = row(10);
         let text = label(name, "section-title");
@@ -248,13 +300,15 @@ fn build(app: &gtk::Application, smoke: bool) {
             "Calibrate"
         });
         zone_row.append(&button);
+        if i == 2 {
+            zone_row.set_visible(state.borrow().settings.notes);
+            notebook_row = Some(zone_row.clone());
+        }
         calibration.append(&zone_row);
         zone_buttons.push(button);
     }
     calibration.append(&label("Both monitors are required. Notebook and phone are optional. Keep your phone in a different place from your notebook.","muted"));
-    let notes = gtk::CheckButton::with_label("Allow looking at my notebook");
-    notes.set_active(state.borrow().settings.notes);
-    calibration.append(&notes);
+    let notebook_row = notebook_row.unwrap();
     let clear = gtk::Button::with_label("Clear calibration");
     calibration.append(&clear);
     right.append(&calibration);
@@ -282,6 +336,46 @@ fn build(app: &gtk::Application, smoke: bool) {
     sound_row.append(&test);
     sound_row.append(&default_sound);
     sound_card.append(&sound_row);
+    sound_card.append(&label("FIND SOUND EFFECTS", "section-title"));
+    let sound_sites = column(4);
+    sound_card.append(&sound_sites);
+    sound_card.append(&label(
+        "Open a website, download an audio file, then choose it above.",
+        "muted",
+    ));
+    let site_editor = gtk::Expander::new(Some("Add a website"));
+    let editor = column(8);
+    let site_name = gtk::Entry::new();
+    site_name.set_placeholder_text(Some("Website name"));
+    site_name.update_property(&[gtk::accessible::Property::Label("Website name")]);
+    let site_url = gtk::Entry::new();
+    site_url.set_placeholder_text(Some("https://example.com/sounds"));
+    site_url.update_property(&[gtk::accessible::Property::Label("Website URL")]);
+    let add_site = gtk::Button::with_label("Save website link");
+    editor.append(&site_name);
+    editor.append(&site_url);
+    editor.append(&add_site);
+    site_editor.set_child(Some(&editor));
+    sound_card.append(&site_editor);
+    let settings_card = card("05   SETTINGS");
+    let notes_row = row(16);
+    let mode_title = column(4);
+    mode_title.set_hexpand(true);
+    mode_title.append(&label("Notebook mode", "section-title"));
+    mode_title.append(&label(
+        "Off: skip notebook calibration. Saved calibration is kept.",
+        "muted",
+    ));
+    notes_row.append(&mode_title);
+    let notes = gtk::Switch::new();
+    notes.set_valign(gtk::Align::Center);
+    notes.update_property(&[gtk::accessible::Property::Label("Notebook mode")]);
+    notes.set_active(state.borrow().settings.notes);
+    notes.set_tooltip_text(Some(
+        "Allow a calibrated notebook position during this session",
+    ));
+    notes_row.append(&notes);
+    settings_card.append(&notes_row);
     let timing = row(8);
     let timing_label = label("Alert after (seconds)", "muted");
     timing_label.set_hexpand(true);
@@ -289,7 +383,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     let delay = gtk::SpinButton::with_range(2., 30., 1.);
     delay.set_value(state.borrow().settings.delay as f64);
     timing.append(&delay);
-    sound_card.append(&timing);
+    settings_card.append(&timing);
     let tolerance_row = row(8);
     let tolerance_label = label("Position tolerance", "muted");
     tolerance_label.set_hexpand(true);
@@ -298,12 +392,10 @@ fn build(app: &gtk::Application, smoke: bool) {
     tolerance.set_digits(1);
     tolerance.set_value(state.borrow().settings.tolerance);
     tolerance_row.append(&tolerance);
-    sound_card.append(&tolerance_row);
-    sound_card.append(&label(
-        "Higher tolerance allows more movement. Alerts have a 25-second cooldown.",
-        "muted",
-    ));
-    right.append(&sound_card);
+    settings_card.append(&tolerance_row);
+    settings_card.append(&label("Higher tolerance allows more movement. Closing the window keeps the session running in the tray. Use Quit to stop it.","muted"));
+    left.append(&sound_card);
+    right.append(&settings_card);
     body.append(&left);
     body.append(&right);
     root.append(&body);
@@ -317,6 +409,35 @@ fn build(app: &gtk::Application, smoke: bool) {
             }),
         "notice",
     );
+    rebuild_sound_sites(&sound_sites, &state, &notice);
+    add_site.connect_clicked({
+        let (state, notice, list, site_name, site_url, site_editor) = (
+            state.clone(),
+            notice.clone(),
+            sound_sites.clone(),
+            site_name.clone(),
+            site_url.clone(),
+            site_editor.clone(),
+        );
+        move |_| {
+            let result = SoundSite::new(&site_name.text(), &site_url.text()).and_then(|site| {
+                let mut state = state.borrow_mut();
+                state.settings.add_sound_site(site)?;
+                state.save()
+            });
+            if result.is_ok() {
+                site_name.set_text("");
+                site_url.set_text("");
+                site_editor.set_expanded(false);
+                rebuild_sound_sites(&list, &state, &notice);
+            }
+            feedback(
+                &notice,
+                result,
+                "Website saved. Click its name to open it in your browser.",
+            );
+        }
+    });
     notice.set_selectable(true);
     root.append(&notice);
     root.append(&label("Estimates look direction. It cannot confirm handwriting, scrolling, or mental focus. Uncertain readings stay quiet.","muted"));
@@ -327,7 +448,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     window.set_child(Some(&scroll));
     background.connect_clicked({
         let window = window.clone();
-        move |_| window.minimize()
+        move |_| window.close()
     });
     start.connect_clicked({let (state,status,notice)=(state.clone(),status.clone(),notice.clone()); move |_| {
         let mut state = state.borrow_mut();
@@ -335,7 +456,7 @@ fn build(app: &gtk::Application, smoke: bool) {
         if state.blocked { notice.set_text("Resolve the saved settings error before starting. The original file is preserved."); return; }
         let identity = camera::identity(&state.settings.camera);
         if identity != state.settings.camera_identity {
-            state.settings.zones = Default::default(); state.settings.notes = false; state.settings.camera_identity = identity;
+            state.settings.zones = Default::default(); state.settings.camera_identity = identity;
             notice.set_text("Camera changed. Calibrate your working positions again.");
         }
         match Worker::start(&state.settings.camera,false) {
@@ -344,10 +465,13 @@ fn build(app: &gtk::Application, smoke: bool) {
         }
     }});
     preview_toggle.connect_toggled({
-        let (state, picture) = (state.clone(), picture.clone());
+        let (state, picture, window) = (state.clone(), picture.clone(), window.clone());
         move |toggle| {
+            picture.set_visible(toggle.is_active());
             if let Some(worker) = &state.borrow().worker {
-                worker.preview.store(toggle.is_active(), Ordering::Relaxed);
+                worker
+                    .preview
+                    .store(toggle.is_active() && window.is_visible(), Ordering::Relaxed);
             }
             if !toggle.is_active() {
                 picture.set_paintable(None::<&gdk::Paintable>);
@@ -377,7 +501,6 @@ fn build(app: &gtk::Application, smoke: bool) {
             state.settings.camera = path;
             state.settings.camera_identity.clear();
             state.settings.zones = Default::default();
-            state.settings.notes = false;
             status.set_text("Paused · camera changed");
             feedback(
                 &notice,
@@ -426,7 +549,6 @@ fn build(app: &gtk::Application, smoke: bool) {
         move |_| {
             let mut state = state.borrow_mut();
             state.settings.zones = Default::default();
-            state.settings.notes = false;
             state.calibration = None;
             state.gate.reset();
             feedback(
@@ -436,21 +558,32 @@ fn build(app: &gtk::Application, smoke: bool) {
             );
         }
     });
-    notes.connect_toggled({
-        let (state, notice) = (state.clone(), notice.clone());
+    notes.connect_active_notify({
+        let (state, notice, notebook_row) = (state.clone(), notice.clone(), notebook_row.clone());
         move |toggle| {
             if state.borrow().settings.notes == toggle.is_active() {
                 return;
             }
-            if toggle.is_active() && state.borrow().settings.zones[2].is_none() {
-                notice.set_text("Calibrate the notebook first.");
-                toggle.set_active(false);
-                return;
-            }
             let mut state = state.borrow_mut();
             state.settings.notes = toggle.is_active();
+            if !toggle.is_active()
+                && state
+                    .calibration
+                    .as_ref()
+                    .is_some_and(|capture| capture.zone == 2)
+            {
+                state.calibration = None;
+            }
             state.gate.reset();
-            feedback(&notice, state.save(), "Notebook preference saved.");
+            notebook_row.set_visible(toggle.is_active());
+            let message = if !toggle.is_active() {
+                "Notebook mode off. Calibration is saved for next time."
+            } else if state.settings.zones[2].is_some() {
+                "Notebook mode on. Your saved calibration is ready."
+            } else {
+                "Notebook mode on. Calibrate the notebook before using that position."
+            };
+            feedback(&notice, state.save(), message);
         }
     });
     delay.connect_value_changed({
@@ -483,6 +616,16 @@ fn build(app: &gtk::Application, smoke: bool) {
                 .title("Choose your reminder sound")
                 .modal(true)
                 .build();
+            let folder = state
+                .borrow()
+                .settings
+                .sound
+                .as_ref()
+                .and_then(|path| path.parent().map(PathBuf::from))
+                .or_else(dirs::download_dir);
+            if let Some(folder) = folder.filter(|path| path.is_dir()) {
+                dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+            }
             dialog.open(Some(&window), None::<&gio::Cancellable>, {
                 let (state, notice, sound_name) =
                     (state.clone(), notice.clone(), sound_name.clone());
@@ -523,6 +666,40 @@ fn build(app: &gtk::Application, smoke: bool) {
             feedback(&notice, state.save(), "Default chime selected.");
         }
     });
+    for name in ["show", "hide", "toggle-session", "quit"] {
+        let action = gio::SimpleAction::new(name, None);
+        action.connect_activate({
+            let (window, start, app) = (window.clone(), start.clone(), app.clone());
+            move |action, _| match action.name().as_str() {
+                "show" => window.present(),
+                "hide" => window.close(),
+                "toggle-session" => start.emit_clicked(),
+                "quit" => app.quit(),
+                _ => {}
+            }
+        });
+        app.add_action(&action);
+    }
+    let notebook_action = gio::SimpleAction::new("notebook-mode", Some(glib::VariantTy::BOOLEAN));
+    notebook_action.connect_activate({
+        let notes = notes.clone();
+        move |_, parameter| {
+            if let Some(enabled) = parameter.and_then(|value| value.get::<bool>()) {
+                notes.set_active(enabled);
+            }
+        }
+    });
+    app.add_action(&notebook_action);
+    let (tray_icon, tray_commands) = match TrayIcon::start(state.borrow().settings.notes) {
+        Ok((tray, commands)) => (Some(tray), Some(commands)),
+        Err(error) => {
+            notice.set_text(&format!(
+                "Tray unavailable: {error}. Closing the window will quit."
+            ));
+            (None, None)
+        }
+    };
+    let tray_icon = Rc::new(RefCell::new(tray_icon));
     let timer = glib::timeout_add_local(Duration::from_millis(100), {
         let (
             state,
@@ -535,6 +712,11 @@ fn build(app: &gtk::Application, smoke: bool) {
             metrics,
             preview_toggle,
             notes,
+            notebook_row,
+            window,
+            app,
+            tray_icon,
+            background,
         ) = (
             state.clone(),
             status.clone(),
@@ -546,16 +728,37 @@ fn build(app: &gtk::Application, smoke: bool) {
             metrics.clone(),
             preview_toggle.clone(),
             notes.clone(),
+            notebook_row.clone(),
+            window.clone(),
+            app.clone(),
+            tray_icon.clone(),
+            background.clone(),
         );
         move || {
+            if let Some(commands) = &tray_commands {
+                for command in commands.try_iter() {
+                    match command {
+                        Command::Open => app.activate_action("show", None),
+                        Command::ToggleSession => app.activate_action("toggle-session", None),
+                        Command::Notebook(enabled) => {
+                            app.activate_action("notebook-mode", Some(&enabled.to_variant()))
+                        }
+                        Command::Quit => {
+                            app.quit();
+                            return glib::ControlFlow::Continue;
+                        }
+                    }
+                }
+            }
             let mut state = state.borrow_mut();
             if let Err(error) = state.audio.poll() {
                 notice.set_text(&format!("{error:#}"));
             }
             if let Some(worker) = &state.worker {
-                worker
-                    .preview
-                    .store(preview_toggle.is_active(), Ordering::Relaxed);
+                worker.preview.store(
+                    preview_toggle.is_active() && window.is_visible(),
+                    Ordering::Relaxed,
+                );
             }
             let sample = state.worker.as_ref().and_then(Worker::poll);
             if let Some(sample) = sample {
@@ -647,6 +850,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                     if let Some(zone) = Zone::fit(&calibration.samples) {
                         let overlap = state.settings.zones.iter().enumerate().any(|(i, other)| {
                             i != calibration.zone
+                                && (i != 2 || state.settings.notes)
                                 && (i == 3 || calibration.zone == 3)
                                 && other.as_ref().is_some_and(|other| {
                                     zone.distance(&other.mean).min(other.distance(&zone.mean)) < 3.
@@ -697,6 +901,20 @@ fn build(app: &gtk::Application, smoke: bool) {
                 picture.set_paintable(None::<&gdk::Paintable>);
                 progress.set_fraction(0.);
             }
+            notebook_row.set_visible(state.settings.notes);
+            let tray_available = tray_icon.borrow().as_ref().is_some_and(TrayIcon::available);
+            background.set_sensitive(tray_available);
+            if let Some(tray) = tray_icon.borrow_mut().as_mut() {
+                tray.update(
+                    status.text().to_string(),
+                    state.worker.is_some(),
+                    state.settings.notes,
+                );
+            }
+            if !tray_available && !window.is_visible() {
+                window.present();
+                notice.set_text("The tray is unavailable. The window has reopened so session controls stay accessible.");
+            }
             let allow_notes = state.settings.notes;
             drop(state);
             if notes.is_active() != allow_notes {
@@ -706,10 +924,19 @@ fn build(app: &gtk::Application, smoke: bool) {
         }
     });
     window.connect_close_request({
-        let state = state.clone();
-        move |_| {
-            state.borrow_mut().pause();
-            glib::Propagation::Proceed
+        let (state, tray_icon, picture) = (state.clone(), tray_icon.clone(), picture.clone());
+        move |window| {
+            if tray_icon.borrow().as_ref().is_some_and(TrayIcon::available) {
+                if let Some(worker) = &state.borrow().worker {
+                    worker.preview.store(false, Ordering::Relaxed);
+                }
+                picture.set_paintable(None::<&gdk::Paintable>);
+                window.set_visible(false);
+                glib::Propagation::Stop
+            } else {
+                state.borrow_mut().pause();
+                glib::Propagation::Proceed
+            }
         }
     });
     let sources = RefCell::new(Some((timer, theme_timer)));
@@ -720,6 +947,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             theme_timer.remove();
         }
         shutdown_state.borrow_mut().pause();
+        tray_icon.borrow_mut().take();
     });
     let keys = gtk::EventControllerKey::new();
     keys.connect_key_pressed({

@@ -2,6 +2,7 @@ mod audio;
 mod camera;
 mod focus;
 mod settings;
+mod tray;
 mod ui;
 mod vision;
 

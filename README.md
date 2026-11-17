@@ -31,15 +31,23 @@ request sudo. Building and running directly does not install anything system-wid
    seconds to look at the target, then collects at least 20 valid readings
    over four seconds. Keep a natural working position and look around a
    small area of the target. Reminders stay disabled until both are calibrated.
-3. Optionally calibrate **Notebook** and enable its checkbox. Calibrate
+3. In **Settings**, turn **Notebook mode** on when you want to use notes, then
+   calibrate **Notebook**. Turn the mode off to skip it; calibration is retained
+   when switching modes. Calibrate
    **Phone** where you normally hold it; place it away from the notebook.
    Calibration rejects overlapping phone and working positions.
-4. Choose a local WAV, MP3, OGG or other FFmpeg-supported sound and press
+4. Under **Find sound effects**, open Myinstants or add your own website links.
+   Download a sound in your browser, then choose a local WAV, MP3, OGG or
+   other FFmpeg-supported sound and press
    **Test**. The default is a short generated chime. Playback does not overlap.
 5. Adjust the alert delay (default six seconds) and position tolerance.
    Higher tolerance allows more movement. Alerts have a 25-second cooldown.
-6. Minimize the window to keep monitoring. **Pause session** releases the
-   webcam and stops audio. Closing the window quits. There is no autostart.
+6. Press **Hide to tray** or close the window to keep monitoring without a
+   tiled window. Click the tray icon or open Focus Buddy from Apps to return.
+   Hover over the tray icon to see the current status and notebook mode.
+   Right-click for **Open**, **Start/Pause**, **Notebook mode**, or **Quit**.
+   **Pause** releases the webcam; **Quit** stops monitoring and exits. There
+   is no autostart. If the tray host goes away, the app reopens its window.
 
 Recalibrate after moving your camera, notebook, monitors, or seating position.
 Switching camera devices clears calibration. The camera identity is checked
@@ -99,6 +107,31 @@ reading counts, then releases the camera without recording.
 `/usr/lib/libonnxruntime.so`. After installing the Arch package, models also
 exist at `/usr/share/focus-buddy/models`.
 
-Source: `ui.rs` owns the GTK controls; `camera.rs` owns the bounded capture
+The modes and reminder controls live in **Settings**. Notebook mode can be
+turned on before calibration, but its position is only allowed after you
+calibrate it. Turning it off immediately removes that position from the
+working set without deleting its saved calibration. The camera preview is
+hidden by default and stops rendering when the window is hidden.
+
+Tray support uses the freedesktop StatusNotifierItem protocol through `ksni`;
+Omarchy supports it directly, so no shell plugin or configuration change is
+needed. Some Omarchy setups put new tray icons in the expandable tray drawer.
+
+The optional desktop integration check uses the installed Python PyGObject
+bindings and Hyprland to exercise the real D-Bus menu and window lifecycle,
+with an isolated tray host and isolated saved settings:
+
+```sh
+cargo build --locked
+dbus-run-session -- /usr/bin/python tests/desktop.py
+```
+
+Source: `tray.rs` owns the tray protocol and menu; `ui.rs` owns the GTK controls; `camera.rs` owns the bounded capture
 worker; `vision.rs` runs the models; `focus.rs` handles calibration and alert
 timing; `settings.rs` saves state; `audio.rs` manages one audio player.
+
+Website bookmarks open in your default browser only when clicked. Myinstants
+is an external website, not bundled audio. Saved website names and URLs can
+be added or removed in the sound section. The app makes no background
+requests to these websites. Its sound picker starts in Downloads when no
+sound has been selected.
