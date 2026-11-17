@@ -1,6 +1,6 @@
 # Contributing
 
-Use the Linux prerequisites in [README.md](README.md). Keep changes small and
+Use the Linux prerequisites in the [user guide](docs/guide.md#other-linux-distributions). Keep changes small and
 preserve saved calibration, optional notebook mode, continuous reminder audio,
 bounded frame handling, and the window/tray lifecycle.
 
