@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod audio;
 mod camera;
 mod focus;
@@ -21,7 +23,6 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "--camera-check") {
-        vision::init_runtime()?;
         let device = args.get(1).map(String::as_str).unwrap_or("/dev/video0");
         let worker = camera::Worker::start(device, false)?;
         let start = Instant::now();
@@ -52,7 +53,6 @@ fn run() -> Result<()> {
         .first()
         .is_some_and(|arg| arg == "--check" || arg == "--bench")
     {
-        vision::init_runtime()?;
         let mut engine = vision::Vision::load(&settings::models_directory())?;
         let frame = if args[0] == "--bench" {
             let path = args.get(1).context("Usage: focus-buddy --bench IMAGE")?;
@@ -85,7 +85,6 @@ fn run() -> Result<()> {
     if args.len() > 1 || args.first().is_some_and(|arg| arg != "--smoke") {
         bail!("Unknown option. Use --help.");
     }
-    vision::init_runtime()?;
     let code = ui::launch(args.first().is_some_and(|arg| arg == "--smoke"));
     if i32::from(code) != 0 {
         bail!("Desktop app exited with {}", i32::from(code));

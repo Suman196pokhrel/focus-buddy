@@ -1,140 +1,171 @@
 # Focus Buddy
 
-![Focus Buddy native interface](assets/screenshot.png)
+A small native Rust app that plays a sound when your webcam estimates you have
+looked away from your working positions. Look back and the sound stops.
 
-A small Rust desktop app for Linux that plays your chosen sound when your
-webcam estimates that you have looked away from your working positions for
-several seconds. Everything runs locally. Camera frames stay in memory and
-are discarded; there is no recording, cloud service, browser, or account.
+![Focus Buddy desktop interface](assets/screenshot.png)
 
-## Run
+Camera frames are processed on your computer and discarded. No recordings,
+uploads, accounts, or telemetry. You choose when to turn the camera on.
 
-The project lives in `~/DevStuff/projects/focus-buddy`.
+## Install on Arch Linux / Omarchy
+
+**Tested on Arch Linux / Omarchy, x86-64.** You need a webcam, two screens,
+an audio output, an internet connection for installation, and administrator
+access to install system packages. The first build takes several minutes;
+later builds reuse downloaded dependencies. There is no prebuilt binary release yet.
+
+1. On GitHub, choose **Code → Download ZIP**, extract it, and open a terminal
+   in the extracted `focus-buddy` folder. Or clone the repository using its
+   **Code** URL and open that folder.
+
+   ```sh
+   git clone https://github.com/Suman196pokhrel/focus-buddy.git
+   cd focus-buddy
+   ```
+
+2. On Arch, bring your system up to date first with `sudo pacman -Syu`.
+3. Run:
+
+   ```sh
+   ./install.sh
+   ```
+
+   If an extracted archive loses executable permissions, use `sh install.sh`.
+   Run as your regular user; the installer asks for administrator access only
+   when installing packages. It installs missing dependencies, downloads and
+   verifies the two models, builds an Arch package, installs it with pacman,
+   and checks inference without opening your webcam.
+4. Find **Focus Buddy** in your app launcher. You can also run `focus-buddy`.
+
+For a dependency check that changes nothing: `./install.sh --check`.
+The installer uses the CPU ONNX Runtime package only if a compatible provider
+is not already installed. It does not add startup services or change desktop settings.
+
+## Your first session
+
+1. Choose your camera and click **Start setup**. **Show camera preview** is
+   optional; the preview is off by default.
+2. Look naturally at your first screen and click its **Set position** button.
+   Keep looking there for about six seconds. Repeat for **Screen 2**.
+   Reminders begin once both screen positions are saved.
+3. If you take handwritten notes, turn on **Notebook mode** in Settings and
+   set the notebook position. Turn it off for sessions without notes; its
+   saved position is kept. You can also set a **Phone** position where you
+   normally hold your phone. Keep phone and notebook positions apart.
+4. Choose a local sound with **Choose sound…**, then **Preview sound**.
+   WAV, MP3, and OGG are supported through FFmpeg. **Use chime** restores the
+   included sound. Website links open in your browser: download a sound there,
+   then choose the downloaded file in Focus Buddy. External sites have their
+   own privacy policies and audio licenses.
+5. Choose **Remind me after** in Settings (six seconds by default). Your sound
+   loops after that delay until a saved working position is recognized.
+   A new distraction starts a fresh delay. **Fine-tune detection** lets you
+   allow more head movement if normal movement triggers reminders.
+
+**Pause session** turns the camera off and stops the sound. **Start session**
+uses your saved positions next time. Repositioning your camera, screens,
+notebook, or chair may require **Update position**. Switching cameras clears
+the saved positions; resetting them asks for confirmation.
+
+### Window and tray
+
+Closing the window or choosing **Hide to tray** keeps the current session
+running. Click the tray icon or open Focus Buddy from the launcher to return.
+Hover over the icon for status; right-click to open, start/pause, toggle
+notebook mode, or quit. Omarchy may put the icon in its expandable tray drawer.
+If the tray host disappears, the window reopens.
+
+Choose **Quit** or press **Ctrl+Q** to exit completely. **Space** pauses a
+running session when keyboard focus is outside a control. There is no autostart.
+
+## What detection can tell
+
+Focus Buddy estimates look direction from facial landmarks and approximate eye
+position. It does not identify phone objects, recognize handwriting, confirm
+scrolling, or measure mental focus. Browsing distractions on a working screen
+will still look like work to this app.
+
+Poor light, glasses, reflections, closed eyes, multiple faces, or overlapping
+working positions can cause uncertain readings. Uncertain readings do not
+start a reminder; once a reminder is sounding, it keeps looping until a working
+position is recognized. Turning fully away before the first alert may go
+unalerted. Stale frames, camera errors, pausing, and position setup stop the
+sound. Live desk accuracy has not been measured across users.
+
+Analysis is capped at 10 frames per second, with one inference thread per
+model and a single latest-frame slot. Hidden previews are not rendered.
+Rust helps with memory safety; GTK, FFmpeg, and ONNX Runtime still determine
+much of the app's memory use. No resource benchmark is implied.
+
+## Update or uninstall
+
+For a Git checkout, run these commands in the project folder:
+
+```sh
+git pull --ff-only
+./install.sh
+```
+
+For a ZIP download, download/extract the newer version and run its installer.
+Quit and reopen an already-running copy after upgrading. Your saved positions
+and preferences stay in your user data directory.
+
+To uninstall the app and models:
+
+```sh
+sudo pacman -R focus-buddy
+```
+
+Personal settings remain at `~/.local/share/focus-buddy/state.json`, or
+`$XDG_DATA_HOME/focus-buddy/state.json` if that variable is set. Remove that
+folder manually only if you also want to delete your saved setup.
+
+## Other Linux distributions / source builds
+
+The automatic installer targets Arch and Omarchy. Other Linux desktops need
+**GTK 4.10+** and its development files, **Rust/Cargo 1.89+**, a C build toolchain,
+`pkg-config`, `curl`, `sha256sum`, **FFmpeg with ffplay**, and the CPU shared
+library from [ONNX Runtime 1.22+](https://onnxruntime.ai/docs/install/).
+Use your distribution's packages where available. Windows and macOS are not supported.
+
+Once prerequisites are installed, from the project folder:
 
 ```sh
 ./bin/fetch-models
 ./bin/build
+./target/release/focus-buddy --check
 ./target/release/focus-buddy
 ```
 
-Requires Rust/Cargo, GTK 4.10+, FFmpeg/ffplay, and the ONNX Runtime CPU shared
-library. On this Arch/Omarchy machine these system libraries were already
-installed. Rust bindings are pinned in Cargo.lock. `./bin/install` builds an
-Arch package and installs its launcher entry through makepkg/pacman; this can
-request sudo. Building and running directly does not install anything system-wide.
+The default runtime library path is `/usr/lib/libonnxruntime.so`. If your
+distribution uses another path, set `ORT_DYLIB_PATH` to its absolute `.so` path
+before running the app. `FOCUS_BUDDY_MODELS` can override the model directory.
+Tray support requires a StatusNotifierItem host. The full desktop flow has
+only been tested on Omarchy/Hyprland; other desktops may need additional tray support.
 
-## Set up your desk
+## Troubleshooting
 
-1. Select your webcam and press **Start session**. Capture uses a 640×480
-   V4L2 stream; if the camera exposes several nodes, try its capture node.
-2. Calibrate **Monitor 1**, then **Monitor 2**. Each capture gives you two
-   seconds to look at the target, then collects at least 20 valid readings
-   over four seconds. Keep a natural working position and look around a
-   small area of the target. Reminders stay disabled until both are calibrated.
-3. In **Settings**, turn **Notebook mode** on when you want to use notes, then
-   calibrate **Notebook**. Turn the mode off to skip it; calibration is retained
-   when switching modes. Calibrate
-   **Phone** where you normally hold it; place it away from the notebook.
-   Calibration rejects overlapping phone and working positions.
-4. Under **Find sound effects**, open Myinstants or add your own website links.
-   Download a sound in your browser, then choose a local WAV, MP3, OGG or
-   other FFmpeg-supported sound and press
-   **Test**. The default is a short generated chime. Playback does not overlap.
-5. Adjust the alert delay (default six seconds) and position tolerance.
-   Higher tolerance allows more movement. After the delay, your sound loops
-   continuously until you return to either monitor or an enabled, calibrated
-   notebook position. Each new distraction starts a fresh delay; there is no cooldown.
-6. Press **Hide to tray** or close the window to keep monitoring without a
-   tiled window. Click the tray icon or open Focus Buddy from Apps to return.
-   Hover over the tray icon to see the current status and notebook mode.
-   Right-click for **Open**, **Start/Pause**, **Notebook mode**, or **Quit**.
-   **Pause** releases the webcam; **Quit** stops monitoring and exits. There
-   is no autostart. If the tray host goes away, the app reopens its window.
+- **No camera or no picture:** close other camera apps, reconnect your webcam,
+  and click Refresh. A camera may expose multiple entries; try another entry.
+  Check your distribution's camera permissions rather than making devices
+  world-writable. Capture currently requires a 640×480 V4L2 stream.
+- **Sound keeps playing:** look back at a saved working position, or click
+  Pause session. Update positions after moving your desk setup.
+- **Sound will not play:** preview the included chime and check your audio
+  output. Keep custom sounds on disk; removing or moving the file breaks its
+  saved selection. Network playlists are intentionally blocked.
+- **Model/runtime error:** run `focus-buddy --check` in a terminal. On Arch,
+  rerun the installer to restore models and missing dependencies. For a source
+  build, run `./bin/fetch-models` and check `ORT_DYLIB_PATH`.
+- **Invalid saved settings:** the original file is preserved and saving is
+  blocked. Quit, rename `state.json` to `state.json.backup`, then reopen and
+  set up your positions again. Keep the backup private.
 
-Recalibrate after moving your camera, notebook, monitors, or seating position.
-Switching camera devices clears calibration. The camera identity is checked
-again at session start. Saved settings are written atomically to
-`~/.local/share/focus-buddy/state.json` (or your XDG data directory).
+## Development and security
 
-| Shortcut | Action |
-| --- | --- |
-| Space | Pause a running session when focus is not in a control |
-| Ctrl+Q | Quit |
-
-## What this version can tell
-
-It estimates **look direction**, using relative facial geometry and approximate
-eye position. It does **not** recognize handwriting, identify phone objects,
-confirm scrolling, or measure mental focus. The phone setting is a calibrated
-look position, not an object detector. You can still browse distractions on a
-monitor without triggering an alert.
-
-Missing faces, multiple faces, closed/poorly visible eyes, and ambiguous
-positions reset the initial alert timer. Once an alert is sounding, uncertain
-readings keep it looping until a working position is recognized. Stale camera
-frames, camera errors, Pause, calibration, and changes to detection settings
-stop the loop. Turning fully away before the first alert can still go unalerted. Glasses, reflections,
-dim light, and overlapping phone/notebook positions can limit accuracy.
-Live desk accuracy has not yet been measured.
-
-## Resource use
-
-Camera output and inference are capped at 10 FPS. A single latest-frame slot
-replaces old frames instead of queuing them. Each model has one inference
-thread, with idle thread spinning disabled. Preview is off by default. Pausing
-kills and reaps the camera process. GTK uses the desktop's graphics stack;
-GPU inference is not enabled without measurements showing a benefit.
-
-Rust is used for memory safety, predictable ownership, and concurrency. It is
-not assumed to use less memory than C or C++; model sessions, frame buffers,
-GTK, and FFmpeg account for much of the footprint. The program uses the system
-ONNX Runtime and FFmpeg rather than reimplementing inference or camera codecs.
-
-## Check and develop
-
-```sh
-./bin/test
-./target/release/focus-buddy --check
-./target/release/focus-buddy --bench path/to/a/face.jpg
-./target/release/focus-buddy --smoke
-./target/release/focus-buddy --camera-check /dev/video0
-```
-
-`--check` verifies model hashes and performs blank-frame inference without a
-camera or display. `--bench` reports median/p95 inference time for a still
-image. Neither measures webcam gaze accuracy. `--smoke` opens the native
-window briefly and saves `target/ui-smoke.png`; it never opens the webcam. `--camera-check` captures for five seconds, reports frame and eye
-reading counts, then releases the camera without recording.
-
-`FOCUS_BUDDY_MODELS` overrides the model directory. `ORT_DYLIB_PATH` overrides
-`/usr/lib/libonnxruntime.so`. After installing the Arch package, models also
-exist at `/usr/share/focus-buddy/models`.
-
-The modes and reminder controls live in **Settings**. Notebook mode can be
-turned on before calibration, but its position is only allowed after you
-calibrate it. Turning it off immediately removes that position from the
-working set without deleting its saved calibration. The camera preview is
-hidden by default and stops rendering when the window is hidden.
-
-Tray support uses the freedesktop StatusNotifierItem protocol through `ksni`;
-Omarchy supports it directly, so no shell plugin or configuration change is
-needed. Some Omarchy setups put new tray icons in the expandable tray drawer.
-
-The optional desktop integration check uses the installed Python PyGObject
-bindings and Hyprland to exercise the real D-Bus menu and window lifecycle,
-with an isolated tray host and isolated saved settings:
-
-```sh
-cargo build --locked
-dbus-run-session -- /usr/bin/python tests/desktop.py
-```
-
-Source: `tray.rs` owns the tray protocol and menu; `ui.rs` owns the GTK controls; `camera.rs` owns the bounded capture
-worker; `vision.rs` runs the models; `focus.rs` handles calibration and alert
-timing; `settings.rs` saves state; `audio.rs` manages one audio player.
-
-Website bookmarks open in your default browser only when clicked. Myinstants
-is an external website, not bundled audio. Saved website names and URLs can
-be added or removed in the sound section. The app makes no background
-requests to these websites. Its sound picker starts in Downloads when no
-sound has been selected.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build checks and the optional desktop
+integration test, [SECURITY.md](SECURITY.md) for security boundaries and reporting,
+and [models/README.md](models/README.md) for model sources and licenses.
+The application is MIT licensed; third-party dependencies and models retain
+their own licenses. `Cargo.lock` is committed for reproducible dependency versions.

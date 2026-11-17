@@ -3,7 +3,8 @@ use anyhow::{Context, Result, bail, ensure};
 use gtk::glib;
 use serde::{Deserialize, Serialize};
 use std::{
-    io::Write,
+    io::{Read, Write},
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
 
@@ -112,21 +113,38 @@ impl Settings {
         Ok(())
     }
     pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let settings: Self =
-                    serde_json::from_slice(&bytes).context("Cannot read saved settings")?;
-                settings.validate()?;
-                Ok(settings)
+        const MAX_BYTES: u64 = 128 * 1024;
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("Cannot open saved settings"),
-        }
+            Err(error) => return Err(error).context("Cannot open saved settings"),
+        };
+        ensure!(
+            metadata.is_file() && metadata.len() <= MAX_BYTES,
+            "Saved settings must be a regular file smaller than 128 KiB. The original has been preserved."
+        );
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(MAX_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() as u64 <= MAX_BYTES,
+            "Saved settings are too large. The original has been preserved."
+        );
+        let settings: Self =
+            serde_json::from_slice(&bytes).context("Cannot read saved settings")?;
+        settings.validate()?;
+        Ok(settings)
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
         let parent = path.parent().context("Invalid settings path")?;
-        std::fs::create_dir_all(parent)?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
         file.write_all(&serde_json::to_vec_pretty(self)?)?;
         file.as_file().sync_all()?;
@@ -159,6 +177,35 @@ pub fn models_directory() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_settings_are_rejected_without_changing_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let bytes = vec![b' '; 128 * 1024 + 1];
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(Settings::load(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(Settings::load(dir.path()).is_err());
+    }
+    #[test]
+    fn new_settings_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private/state.json");
+        Settings::default().save(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     #[test]
     fn website_links_are_validated_and_persisted() {
         let dir = tempfile::tempdir().unwrap();

@@ -124,7 +124,22 @@ fn feedback(notice: &gtk::Label, result: anyhow::Result<()>, success: &str) {
         Err(error) => format!("{error:#}"),
     });
 }
-fn theme(provider: &gtk::CssProvider) {
+fn accent_foreground(accent: &str) -> &'static str {
+    let rgb = u32::from_str_radix(accent.trim_start_matches('#'), 16).unwrap_or(0xa8d5ba);
+    let linear = |value: u32| {
+        let v = value as f64 / 255.;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear((rgb >> 16) & 255)
+        + 0.7152 * linear((rgb >> 8) & 255)
+        + 0.0722 * linear(rgb & 255);
+    if luminance > 0.179 { "black" } else { "white" }
+}
+fn theme_css() -> String {
     let colors = std::fs::read_to_string(
         dirs::home_dir()
             .unwrap_or_default()
@@ -145,17 +160,27 @@ fn theme(provider: &gtk::CssProvider) {
             .then_some(value)
         })
         .unwrap_or("#a8d5ba");
-    provider.load_from_data(&format!(r#"
+    let foreground = accent_foreground(accent);
+    format!(
+        r#"
 window {{ background: #10161b; color: #edf1ef; }}
-.root {{ padding: 28px; }} .title {{ font-size: 30px; font-weight: 800; }}
-.eyebrow {{ color: {accent}; font-size: 11px; font-weight: 700; letter-spacing: 2px; }}
-.muted {{ color: #9faeb5; font-size: 12px; }} .section-title {{ font-size: 15px; font-weight: 700; }}
-.status {{ font-size: 20px; font-weight: 700; }}
-.card {{ background: #182127; padding: 20px; border: 1px solid #2c393f; border-radius: 0; }}
-button {{ padding: 9px 14px; border-radius: 0; }} button.primary {{ background: {accent}; color: #10161b; font-weight: 700; }}
-.notice {{ color: #e3c698; font-size: 12px; }} progressbar progress {{ background: {accent}; }}
+.root {{ padding: 20px; }} .title {{ font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }}
+.eyebrow {{ color: {accent}; font-size: 10px; font-weight: 700; letter-spacing: 2px; }}
+.muted {{ color: #a8b7bf; font-size: 12px; }} .section-title {{ font-size: 15px; font-weight: 700; }}
+.status {{ font-size: 22px; font-weight: 700; }} .status.alerting {{ color: #f0c88c; }}
+.card {{ background: #182127; padding: 16px; border: 1px solid #2c393f; border-radius: 8px; }}
+button {{ background: #26343d; color: #edf1ef; padding: 9px 13px; border: 1px solid #3c4b55; box-shadow: none; text-shadow: none; }}
+button:hover {{ background: #30434e; }} button:disabled {{ opacity: 0.55; }}
+button.primary {{ background: {accent}; color: {foreground}; border-color: {accent}; font-weight: 700; }}
+button.primary:hover {{ opacity: 0.9; }} button.link {{ background: transparent; border: none; padding: 5px 0; }} button.link label {{ color: {accent}; }}
+entry, spinbutton {{ background: #10191f; color: #edf1ef; border: 1px solid #3c4b55; }}
+spinbutton button {{ padding: 6px 10px; }}
+button:focus-visible, entry:focus {{ outline: 2px solid {accent}; outline-offset: 2px; }}
+switch {{ background: #34444e; }} switch:checked {{ background: {accent}; }} switch slider {{ background: #edf1ef; }}
+.notice {{ color: #e3c698; font-size: 12px; }} progressbar trough {{ background: #34444e; border: none; min-height: 4px; }} progressbar progress {{ background: {accent}; }}
 .preview {{ background: #0c1115; border: 1px solid #2c393f; }}
-"#));
+"#
+    )
 }
 
 pub fn launch(smoke: bool) -> glib::ExitCode {
@@ -196,14 +221,19 @@ fn build(app: &gtk::Application, smoke: bool) {
         .default_height(780)
         .build();
     let provider = gtk::CssProvider::new();
-    theme(&provider);
+    let mut current_css = theme_css();
+    provider.load_from_data(&current_css);
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
     let theme_timer = glib::timeout_add_local(Duration::from_secs(5), move || {
-        theme(&provider);
+        let css = theme_css();
+        if css != current_css {
+            provider.load_from_data(&css);
+            current_css = css;
+        }
         glib::ControlFlow::Continue
     });
     let root = column(20);
@@ -214,7 +244,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     titles.set_hexpand(true);
     titles.append(&label("Focus Buddy", "title"));
     titles.append(&label(
-        "Your webcam stays local. Your attention gets a gentle reminder.",
+        "A small reminder to come back to what matters.",
         "muted",
     ));
     heading.append(&titles);
@@ -235,12 +265,13 @@ fn build(app: &gtk::Application, smoke: bool) {
     });
     root.append(&heading);
     let body = row(20);
+    body.set_homogeneous(true);
     let left = column(16);
     left.set_hexpand(true);
     let right = column(16);
     right.set_width_request(400);
-    let live = card("01   SESSION");
-    let status = label("Paused · camera released", "status");
+    let live = card("Your session");
+    let status = label("Paused · camera is off", "status");
     live.append(&status);
     let progress = gtk::ProgressBar::new();
     live.append(&progress);
@@ -248,17 +279,32 @@ fn build(app: &gtk::Application, smoke: bool) {
         "10 FPS analysis cap · one inference thread per model",
         "muted",
     );
-    live.append(&metrics);
+    let setup_hint = label(
+        "First time? Start setup, then set the positions of both screens.",
+        "muted",
+    );
+    live.append(&setup_hint);
+    let technical = gtk::Expander::new(Some("Technical details"));
+    technical.set_child(Some(&metrics));
+    live.append(&technical);
     left.append(&live);
-    let preview_card = card("02   CAMERA");
+    let preview_card = card("Camera");
     let available = Rc::new(RefCell::new(camera::cameras()));
     let names: Vec<String> = available
         .borrow()
         .iter()
-        .map(|(_, name)| name.clone())
+        .enumerate()
+        .map(|(index, (_, name))| {
+            format!(
+                "{} · Camera {}",
+                name.split(" · /dev/").next().unwrap_or(name),
+                index + 1
+            )
+        })
         .collect();
     let names_ref: Vec<&str> = names.iter().map(String::as_str).collect();
     let cameras = gtk::DropDown::from_strings(&names_ref);
+    cameras.update_property(&[gtk::accessible::Property::Label("Camera")]);
     let selected = available
         .borrow()
         .iter()
@@ -288,8 +334,8 @@ fn build(app: &gtk::Application, smoke: bool) {
         "muted",
     ));
     left.append(&preview_card);
-    let calibration = card("03   LEARN YOUR DESK");
-    calibration.append(&label("Start the camera, then calibrate each position. You get 2 seconds to look at the target, followed by 4 seconds of samples.","muted"));
+    let calibration = card("Set up your desk");
+    calibration.append(&label("Start setup, look at Screen 1, then choose Set position. Repeat for Screen 2. Each step takes about 6 seconds.","muted"));
     let mut zone_buttons = Vec::new();
     let mut notebook_row = None;
     for (i, name) in NAMES.iter().enumerate() {
@@ -298,9 +344,9 @@ fn build(app: &gtk::Application, smoke: bool) {
         text.set_hexpand(true);
         zone_row.append(&text);
         let button = gtk::Button::with_label(if state.borrow().settings.zones[i].is_some() {
-            "Recalibrate"
+            "Update position"
         } else {
-            "Calibrate"
+            "Set position"
         });
         zone_row.append(&button);
         if i == 2 {
@@ -310,12 +356,12 @@ fn build(app: &gtk::Application, smoke: bool) {
         calibration.append(&zone_row);
         zone_buttons.push(button);
     }
-    calibration.append(&label("Both monitors are required. Notebook and phone are optional. Keep your phone in a different place from your notebook.","muted"));
+    calibration.append(&label("Set both screens before reminders begin. Add your notebook or phone position if you use them. Keep your phone away from your notebook.","muted"));
     let notebook_row = notebook_row.unwrap();
-    let clear = gtk::Button::with_label("Clear calibration");
+    let clear = gtk::Button::with_label("Reset saved positions…");
     calibration.append(&clear);
     right.append(&calibration);
-    let sound_card = card("04   YOUR NUDGE");
+    let sound_card = card("Reminder sound");
     let sound_name = label(
         &state
             .borrow()
@@ -333,13 +379,13 @@ fn build(app: &gtk::Application, smoke: bool) {
     sound_card.append(&sound_name);
     let sound_row = row(8);
     let choose = gtk::Button::with_label("Choose sound…");
-    let test = gtk::Button::with_label("Test");
-    let default_sound = gtk::Button::with_label("Default");
+    let test = gtk::Button::with_label("Preview sound");
+    let default_sound = gtk::Button::with_label("Use chime");
     sound_row.append(&choose);
     sound_row.append(&test);
     sound_row.append(&default_sound);
     sound_card.append(&sound_row);
-    sound_card.append(&label("FIND SOUND EFFECTS", "section-title"));
+    sound_card.append(&label("Find a sound you like", "section-title"));
     let sound_sites = column(4);
     sound_card.append(&sound_sites);
     sound_card.append(&label(
@@ -360,13 +406,13 @@ fn build(app: &gtk::Application, smoke: bool) {
     editor.append(&add_site);
     site_editor.set_child(Some(&editor));
     sound_card.append(&site_editor);
-    let settings_card = card("05   SETTINGS");
+    let settings_card = card("Settings");
     let notes_row = row(16);
     let mode_title = column(4);
     mode_title.set_hexpand(true);
     mode_title.append(&label("Notebook mode", "section-title"));
     mode_title.append(&label(
-        "Off: skip notebook calibration. Saved calibration is kept.",
+        "Allow handwritten notes. Turning this off keeps your saved position.",
         "muted",
     ));
     notes_row.append(&mode_title);
@@ -380,23 +426,35 @@ fn build(app: &gtk::Application, smoke: bool) {
     notes_row.append(&notes);
     settings_card.append(&notes_row);
     let timing = row(8);
-    let timing_label = label("Alert after (seconds)", "muted");
+    let timing_label = label("Remind me after (seconds)", "muted");
     timing_label.set_hexpand(true);
     timing.append(&timing_label);
     let delay = gtk::SpinButton::with_range(2., 30., 1.);
+    delay.update_property(&[gtk::accessible::Property::Label(
+        "Reminder delay in seconds",
+    )]);
     delay.set_value(state.borrow().settings.delay as f64);
     timing.append(&delay);
     settings_card.append(&timing);
     let tolerance_row = row(8);
-    let tolerance_label = label("Position tolerance", "muted");
+    let tolerance_label = label("Movement allowance", "muted");
     tolerance_label.set_hexpand(true);
     tolerance_row.append(&tolerance_label);
     let tolerance = gtk::SpinButton::with_range(1.5, 4., 0.1);
+    tolerance.update_property(&[gtk::accessible::Property::Label("Movement allowance")]);
     tolerance.set_digits(1);
     tolerance.set_value(state.borrow().settings.tolerance);
     tolerance_row.append(&tolerance);
-    settings_card.append(&tolerance_row);
-    settings_card.append(&label("After the alert delay, your sound loops until you return to a working position. Higher tolerance allows more movement. Use Pause or Quit to stop monitoring.","muted"));
+    let fine_tune = gtk::Expander::new(Some("Fine-tune detection"));
+    let fine_tune_body = column(8);
+    fine_tune_body.append(&tolerance_row);
+    fine_tune_body.append(&label(
+        "Increase this only if normal head movement triggers reminders.",
+        "muted",
+    ));
+    fine_tune.set_child(Some(&fine_tune_body));
+    settings_card.append(&fine_tune);
+    settings_card.append(&label("Your sound repeats until you look back at a working position. Pause switches the camera off. Closing the window keeps your session in the tray.","muted"));
     left.append(&sound_card);
     right.append(&settings_card);
     body.append(&left);
@@ -406,9 +464,9 @@ fn build(app: &gtk::Application, smoke: bool) {
         warning
             .as_deref()
             .unwrap_or(if available.borrow().is_empty() {
-                "No webcam detected. Connect one, then press Refresh."
+                "Connect your webcam, then choose Refresh to find it."
             } else {
-                "Calibrate both monitors to enable reminders."
+                "Start setup, then set the position of each screen."
             }),
         "notice",
     );
@@ -443,7 +501,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     });
     notice.set_selectable(true);
     root.append(&notice);
-    root.append(&label("Estimates look direction. It cannot confirm handwriting, scrolling, or mental focus. Uncertain readings stay quiet.","muted"));
+    root.append(&label("Estimates look direction. It cannot confirm handwriting, scrolling, or mental focus. Unclear readings do not start reminders.","muted"));
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&root)
@@ -455,7 +513,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     });
     start.connect_clicked({let (state,status,notice)=(state.clone(),status.clone(),notice.clone()); move |_| {
         let mut state = state.borrow_mut();
-        if state.worker.is_some() { state.pause(); status.set_text("Paused · camera released"); return; }
+        if state.worker.is_some() { state.pause(); status.set_text("Paused · camera is off"); return; }
         if state.blocked { notice.set_text("Resolve the saved settings error before starting. The original file is preserved."); return; }
         let identity = camera::identity(&state.settings.camera);
         if identity != state.settings.camera_identity {
@@ -519,7 +577,14 @@ fn build(app: &gtk::Application, smoke: bool) {
             let names: Vec<String> = available
                 .borrow()
                 .iter()
-                .map(|(_, name)| name.clone())
+                .enumerate()
+                .map(|(index, (_, name))| {
+                    format!(
+                        "{} · Camera {}",
+                        name.split(" · /dev/").next().unwrap_or(name),
+                        index + 1
+                    )
+                })
                 .collect();
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
             cameras.set_model(Some(&gtk::StringList::new(&refs)));
@@ -548,17 +613,27 @@ fn build(app: &gtk::Application, smoke: bool) {
         });
     }
     clear.connect_clicked({
-        let (state, notice) = (state.clone(), notice.clone());
+        let (state, notice, window) = (state.clone(), notice.clone(), window.clone());
         move |_| {
-            let mut state = state.borrow_mut();
-            state.settings.zones = Default::default();
-            state.calibration = None;
-            state.reset_alert();
-            feedback(
-                &notice,
-                state.save(),
-                "Calibration cleared. Recalibrate both monitors before reminders resume.",
-            );
+            let dialog = gtk::AlertDialog::builder()
+                .message("Reset your saved positions?")
+                .detail("Your sound and settings will stay. Set up both screens again before reminders can resume.")
+                .buttons(["Keep positions", "Reset positions"])
+                .cancel_button(0)
+                .default_button(0)
+                .build();
+            dialog.choose(Some(&window), None::<&gio::Cancellable>, {
+                let (state, notice) = (state.clone(), notice.clone());
+                move |choice| {
+                    if choice == Ok(1) {
+                        let mut state = state.borrow_mut();
+                        state.settings.zones = Default::default();
+                        state.calibration = None;
+                        state.reset_alert();
+                        feedback(&notice, state.save(), "Positions reset. Set up both screens before reminders resume.");
+                    }
+                }
+            });
         }
     });
     notes.connect_active_notify({
@@ -584,7 +659,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             } else if state.settings.zones[2].is_some() {
                 "Notebook mode on. Your saved calibration is ready."
             } else {
-                "Notebook mode on. Calibrate the notebook before using that position."
+                "Notebook mode on. Set its position before taking notes."
             };
             feedback(&notice, state.save(), message);
         }
@@ -645,7 +720,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                         feedback(
                             &notice,
                             state.save(),
-                            "Sound saved. Press Test to check playback.",
+                            "Sound saved. Choose Preview sound to hear it.",
                         );
                     }
                 }
@@ -664,7 +739,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                     state.audio.play(&path)
                 }
             });
-            feedback(&notice, result, "Playing your reminder sound.");
+            feedback(&notice, result, "Playing your selected sound.");
         }
     });
     default_sound.connect_clicked({
@@ -727,6 +802,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             app,
             tray_icon,
             background,
+            setup_hint,
         ) = (
             state.clone(),
             status.clone(),
@@ -743,6 +819,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             app.clone(),
             tray_icon.clone(),
             background.clone(),
+            setup_hint.clone(),
         );
         move || {
             if let Some(commands) = &tray_commands {
@@ -817,14 +894,16 @@ fn build(app: &gtk::Application, smoke: bool) {
                             status.set_text(&match attention {
                                 Attention::Working(i) => format!("Working · {}", NAMES[i]),
                                 Attention::Phone => "Looking toward phone position".into(),
-                                Attention::Distracted => "Looking outside working positions".into(),
+                                Attention::Distracted => {
+                                    "Looking away from your working positions".into()
+                                }
                                 Attention::Unknown => {
                                     if state.settings.zones[0].is_none()
                                         || state.settings.zones[1].is_none()
                                     {
-                                        "Calibrate both monitors to begin".into()
+                                        "Set both screen positions to finish setup".into()
                                     } else {
-                                        "Uncertain · waiting quietly".into()
+                                        "Looking for a clear view of your eyes".into()
                                     }
                                 }
                             });
@@ -856,7 +935,11 @@ fn build(app: &gtk::Application, smoke: bool) {
                     if age < 2. {
                         format!("look there in {:.0}s", (2. - age).ceil())
                     } else {
-                        format!("collecting · {} samples", calibration.samples.len())
+                        if age < 6. {
+                            format!("keep looking here · {:.0}s left", (6. - age).ceil())
+                        } else {
+                            "keep your eyes visible · still learning".into()
+                        }
                     }
                 ));
                 progress.set_fraction(((age - 2.) / 4.).clamp(0., 1.));
@@ -885,7 +968,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                             );
                         }
                     } else {
-                        notice.set_text("Could not get stable eye readings. Improve lighting, face the camera, and retry. Glasses or looking too far down can prevent calibration.");
+                        notice.set_text("Your eyes were not clear enough to save this position. Try better lighting, face the camera, and keep your head steady.");
                     }
                     state.reset_alert();
                 }
@@ -899,18 +982,37 @@ fn build(app: &gtk::Application, smoke: bool) {
                 state.reset_alert();
                 status.set_text("Waiting for fresh camera frames…");
             }
+            let screens_ready = state.settings.zones[..2].iter().flatten().count();
+            setup_hint.set_text(if screens_ready == 2 {
+                if state.worker.is_some() {
+                    "Your saved positions are active. Pause any time to switch the camera off."
+                } else {
+                    "Your screen positions are saved. Start a session when you're ready."
+                }
+            } else if state.worker.is_some() {
+                "Setup is in progress. Set both screen positions to enable reminders."
+            } else {
+                "First time? Choose Start setup, then set the position of each screen."
+            });
             start.set_label(if state.worker.is_some() {
                 "Pause session"
+            } else if screens_ready < 2 {
+                "Start setup"
             } else {
                 "Start session"
             });
+            if state.gate.active() {
+                status.add_css_class("alerting");
+            } else {
+                status.remove_css_class("alerting");
+            }
             for (i, button) in zone_buttons.iter().enumerate() {
                 button.set_label(if state.settings.zones[i].is_some() {
-                    "Recalibrate"
+                    "Update position"
                 } else {
-                    "Calibrate"
+                    "Set position"
                 });
-                button.set_sensitive(state.calibration.is_none());
+                button.set_sensitive(state.worker.is_some() && state.calibration.is_none());
             }
             if state.worker.is_none() {
                 picture.set_paintable(None::<&gdk::Paintable>);
@@ -1001,5 +1103,16 @@ fn build(app: &gtk::Application, smoke: bool) {
             println!("GUI smoke passed; no webcam opened.");
             app.quit();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn accent_text_keeps_contrast_for_light_and_dark_themes() {
+        assert_eq!(accent_foreground("#ffffff"), "black");
+        assert_eq!(accent_foreground("#000000"), "white");
+        assert_eq!(accent_foreground("#a8d5ba"), "black");
     }
 }

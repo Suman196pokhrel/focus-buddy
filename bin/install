@@ -1,7 +1,4 @@
 #!/bin/sh
 set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-./bin/fetch-models
-./bin/build
-cd packaging
-exec makepkg -fsi "$@"
+exec sh ./install.sh "$@"

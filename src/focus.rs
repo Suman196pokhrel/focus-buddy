@@ -3,7 +3,7 @@ use std::time::Duration;
 
 pub type Features = [f64; 4];
 const FLOORS: Features = [0.045, 0.055, 0.04, 0.055];
-pub const NAMES: [&str; 4] = ["Monitor 1", "Monitor 2", "Notebook", "Phone"];
+pub const NAMES: [&str; 4] = ["Screen 1", "Screen 2", "Notebook", "Phone"];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Zone {

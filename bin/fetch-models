@@ -7,9 +7,9 @@ fetch() {
         printf '%s already verified\n' "$name"
         return
     fi
-    partial="$name.part"
+    partial=$(mktemp ./.download.XXXXXX)
     trap 'rm -f -- "$partial"' EXIT HUP INT TERM
-    curl --fail --location --retry 2 "$url" --output "$partial"
+    curl --fail --location --proto "=https" --proto-redir "=https" --connect-timeout 15 --max-time 300 --retry 2 "$url" --output "$partial"
     printf '%s  %s\n' "$checksum" "$partial" | sha256sum --check --status
     mv -- "$partial" "$name"
     trap - EXIT HUP INT TERM

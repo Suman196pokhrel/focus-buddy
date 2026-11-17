@@ -1,10 +1,12 @@
 pkgname=focus-buddy
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='A local webcam focus reminder written in Rust'
+url='https://github.com/Suman196pokhrel/focus-buddy'
 arch=('x86_64' 'aarch64')
 license=('MIT')
-depends=('gtk4' 'ffmpeg' 'onnxruntime-cpu')
+options=('!debug')
+depends=('gtk4>=4.10' 'ffmpeg' 'onnxruntime>=1.22')
 makedepends=('rust' 'cargo')
 source=()
 sha256sums=()

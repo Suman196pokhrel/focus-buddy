@@ -99,6 +99,7 @@ fn nms(mut candidates: Vec<Face>) -> Vec<Face> {
 impl Vision {
     pub fn load(directory: &Path) -> Result<Self> {
         verify_models(directory)?;
+        init_runtime()?;
         Ok(Self {
             detector: session(&directory.join("yunet.onnx"))?,
             landmarks: session(&directory.join("landmarks.onnx"))?,

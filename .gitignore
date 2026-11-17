@@ -1,5 +1,44 @@
+# Rust build products and local verification artifacts
 /target/
+
+# Downloaded model weights and interrupted downloads (licenses stay tracked)
 /models/*.onnx
+/models/*.part*
+/models/.download.*
+
+# Arch package build output
 /packaging/*.pkg.tar.*
 /packaging/pkg/
 /packaging/src/
+/packaging/*.log
+
+# Personal settings, recordings, and diagnostic exports
+/state.json
+/settings*.json
+/recordings/
+/screenshots/
+/logs/
+*.log
+*.core
+core.*
+
+# Credentials and local environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Editor, OS, and Python caches
+.idea/
+.vscode/
+.codex/
+.claude/
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

@@ -1,0 +1,30 @@
+name: Checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install native build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev ffmpeg
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup override set stable
+      - name: Formatting and tests
+        run: |
+          cargo fmt --check
+          ./bin/test
+      - name: Dependency advisories
+        run: |
+          cargo install cargo-audit --version 0.23.0 --locked
+          cargo audit
