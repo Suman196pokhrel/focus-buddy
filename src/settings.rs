@@ -57,7 +57,6 @@ pub struct Settings {
     pub sound: Option<PathBuf>,
     pub sound_sites: Vec<SoundSite>,
     pub delay: u64,
-    pub cooldown: u64,
     pub tolerance: f64,
     pub notes: bool,
     pub zones: [Option<Zone>; 4],
@@ -74,7 +73,6 @@ impl Default for Settings {
                 url: "https://www.myinstants.com/en/index/au/".into(),
             }],
             delay: 6,
-            cooldown: 25,
             tolerance: 2.5,
             notes: false,
             zones: Default::default(),
@@ -85,7 +83,6 @@ impl Settings {
     pub fn validate(&self) -> Result<()> {
         if self.version != 1
             || !(2..=30).contains(&self.delay)
-            || !(10..=120).contains(&self.cooldown)
             || !self.tolerance.is_finite()
             || !(1.5..=4.).contains(&self.tolerance)
             || self.zones.iter().flatten().any(|z| !z.valid())
@@ -199,6 +196,10 @@ mod tests {
         };
         settings.zones[2] = Zone::fit(&[[0.; 4]; 30]);
         let mut value = serde_json::to_value(&settings).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("cooldown".into(), serde_json::json!(25));
         value.as_object_mut().unwrap().remove("sound_sites");
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let loaded = Settings::load(&path).unwrap();

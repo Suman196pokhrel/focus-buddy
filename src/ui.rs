@@ -40,9 +40,12 @@ impl State {
     }
     fn pause(&mut self) {
         self.worker.take();
-        self.audio.stop();
         self.calibration = None;
+        self.reset_alert();
+    }
+    fn reset_alert(&mut self) {
         self.gate.reset();
+        self.audio.stop();
     }
     fn sound(&self) -> anyhow::Result<PathBuf> {
         if let Some(path) = &self.settings.sound {
@@ -393,7 +396,7 @@ fn build(app: &gtk::Application, smoke: bool) {
     tolerance.set_value(state.borrow().settings.tolerance);
     tolerance_row.append(&tolerance);
     settings_card.append(&tolerance_row);
-    settings_card.append(&label("Higher tolerance allows more movement. Closing the window keeps the session running in the tray. Use Quit to stop it.","muted"));
+    settings_card.append(&label("After the alert delay, your sound loops until you return to a working position. Higher tolerance allows more movement. Use Pause or Quit to stop monitoring.","muted"));
     left.append(&sound_card);
     right.append(&settings_card);
     body.append(&left);
@@ -531,7 +534,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                     notice.set_text("Start the session before calibrating.");
                     return;
                 }
-                state.gate.reset();
+                state.reset_alert();
                 state.calibration = Some(Calibration {
                     zone: i,
                     started: Instant::now(),
@@ -550,7 +553,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             let mut state = state.borrow_mut();
             state.settings.zones = Default::default();
             state.calibration = None;
-            state.gate.reset();
+            state.reset_alert();
             feedback(
                 &notice,
                 state.save(),
@@ -574,7 +577,7 @@ fn build(app: &gtk::Application, smoke: bool) {
             {
                 state.calibration = None;
             }
-            state.gate.reset();
+            state.reset_alert();
             notebook_row.set_visible(toggle.is_active());
             let message = if !toggle.is_active() {
                 "Notebook mode off. Calibration is saved for next time."
@@ -591,7 +594,7 @@ fn build(app: &gtk::Application, smoke: bool) {
         move |value| {
             let mut state = state.borrow_mut();
             state.settings.delay = value.value_as_int() as u64;
-            state.gate.reset();
+            state.reset_alert();
             feedback(&notice, state.save(), "Alert delay saved.");
         }
     });
@@ -600,7 +603,7 @@ fn build(app: &gtk::Application, smoke: bool) {
         move |value| {
             let mut state = state.borrow_mut();
             state.settings.tolerance = value.value();
-            state.gate.reset();
+            state.reset_alert();
             feedback(&notice, state.save(), "Position tolerance saved.");
         }
     });
@@ -653,7 +656,14 @@ fn build(app: &gtk::Application, smoke: bool) {
         let (state, notice) = (state.clone(), notice.clone());
         move |_| {
             let mut state = state.borrow_mut();
-            let result = state.sound().and_then(|path| state.audio.play(&path));
+            let looping = state.gate.active();
+            let result = state.sound().and_then(|path| {
+                if looping {
+                    state.audio.play_loop(&path)
+                } else {
+                    state.audio.play(&path)
+                }
+            });
             feedback(&notice, result, "Playing your reminder sound.");
         }
     });
@@ -820,14 +830,19 @@ fn build(app: &gtk::Application, smoke: bool) {
                             });
                             let now = state.clock.elapsed();
                             let delay = Duration::from_secs(state.settings.delay);
-                            let cooldown = Duration::from_secs(state.settings.cooldown);
-                            if state.gate.update(attention, now, delay, cooldown) {
-                                let result = state.sound().and_then(|path| state.audio.play(&path));
+                            let was_alerting = state.gate.active();
+                            let alerting = state.gate.update(attention, now, delay);
+                            if alerting && !was_alerting {
+                                let result =
+                                    state.sound().and_then(|path| state.audio.play_loop(&path));
                                 feedback(
                                     &notice,
                                     result,
-                                    "A little nudge. Come back when you’re ready.",
+                                    "Sound looping. Look back at a working position to stop it.",
                                 );
+                            } else if was_alerting && !alerting {
+                                state.audio.stop();
+                                notice.set_text("Back at work · sound stopped.");
                             }
                         }
                     }
@@ -872,7 +887,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                     } else {
                         notice.set_text("Could not get stable eye readings. Improve lighting, face the camera, and retry. Glasses or looking too far down can prevent calibration.");
                     }
-                    state.gate.reset();
+                    state.reset_alert();
                 }
             } else {
                 progress.set_fraction(state.gate.progress(
@@ -881,7 +896,7 @@ fn build(app: &gtk::Application, smoke: bool) {
                 ));
             }
             if state.worker.is_some() && state.last_result.elapsed() > Duration::from_secs(2) {
-                state.gate.reset();
+                state.reset_alert();
                 status.set_text("Waiting for fresh camera frames…");
             }
             start.set_label(if state.worker.is_some() {

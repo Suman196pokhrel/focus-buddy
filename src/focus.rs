@@ -112,38 +112,37 @@ pub fn classify(
 #[derive(Default)]
 pub struct AlertGate {
     since: Option<Duration>,
-    last_alert: Option<Duration>,
+    active: bool,
     last_sample: Option<Duration>,
 }
 impl AlertGate {
-    pub fn update(
-        &mut self,
-        attention: Attention,
-        now: Duration,
-        delay: Duration,
-        cooldown: Duration,
-    ) -> bool {
+    pub fn active(&self) -> bool {
+        self.active
+    }
+    pub fn update(&mut self, attention: Attention, now: Duration, delay: Duration) -> bool {
         if self.last_sample.is_some_and(|last| {
             now < last || now.saturating_sub(last) > Duration::from_millis(1500)
         }) {
-            self.since = None;
+            self.reset();
         }
         self.last_sample = Some(now);
-        if !matches!(attention, Attention::Distracted | Attention::Phone) {
-            self.since = None;
-            return false;
+        match attention {
+            Attention::Working(_) => {
+                self.since = None;
+                self.active = false;
+            }
+            // Keep an established alert through blinks and obscured eyes until work is recognized.
+            Attention::Unknown => {
+                if !self.active {
+                    self.since = None;
+                }
+            }
+            Attention::Distracted | Attention::Phone => {
+                let since = *self.since.get_or_insert(now);
+                self.active |= now.saturating_sub(since) >= delay;
+            }
         }
-        let since = *self.since.get_or_insert(now);
-        if now.saturating_sub(since) >= delay
-            && self
-                .last_alert
-                .is_none_or(|last| now.saturating_sub(last) >= cooldown)
-        {
-            self.last_alert = Some(now);
-            self.since = Some(now);
-            return true;
-        }
-        false
+        self.active
     }
     pub fn progress(&self, now: Duration, delay: Duration) -> f64 {
         self.since.map_or(0., |since| {
@@ -214,23 +213,59 @@ mod tests {
         );
     }
     #[test]
-    fn brief_glances_unknown_and_missing_frames_do_not_trigger() {
+    fn alert_stays_active_until_work_and_rearms_without_a_cooldown() {
         let mut gate = AlertGate::default();
         for n in 0..5 {
-            assert!(!gate.update(Attention::Distracted, seconds(n), seconds(5), seconds(25)));
+            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5)));
         }
-        assert!(!gate.update(Attention::Unknown, seconds(5), seconds(5), seconds(25)));
-        assert!(!gate.update(Attention::Distracted, seconds(6), seconds(5), seconds(25)));
-        assert!(!gate.update(Attention::Distracted, seconds(20), seconds(5), seconds(25)));
-        for n in 21..25 {
-            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5), seconds(25)));
+        for n in 5..10 {
+            assert!(gate.update(Attention::Phone, seconds(n), seconds(5)));
         }
-        assert!(gate.update(Attention::Phone, seconds(25), seconds(5), seconds(25)));
-        for n in 26..50 {
-            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5), seconds(25)));
+        assert!(!gate.update(Attention::Working(0), seconds(10), seconds(5)));
+        for n in 11..16 {
+            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5)));
         }
-        assert!(gate.update(Attention::Phone, seconds(50), seconds(5), seconds(25)));
+        assert!(gate.update(Attention::Phone, seconds(16), seconds(5)));
+        for n in 17..60 {
+            assert!(gate.update(Attention::Phone, seconds(n), seconds(5)));
+        }
+        assert!(!gate.update(Attention::Working(1), seconds(60), seconds(5)));
+        for n in 61..66 {
+            assert!(!gate.update(Attention::Distracted, seconds(n), seconds(5)));
+        }
+        assert!(gate.update(Attention::Distracted, seconds(66), seconds(5)));
+        assert!(!gate.update(Attention::Working(2), seconds(67), seconds(5)));
+    }
+    #[test]
+    fn uncertain_readings_do_not_start_an_alert_or_interrupt_an_active_loop() {
+        let mut gate = AlertGate::default();
+        for n in 0..5 {
+            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5)));
+        }
+        assert!(!gate.update(Attention::Unknown, seconds(5), seconds(5)));
+        for n in 6..11 {
+            assert!(!gate.update(Attention::Phone, seconds(n), seconds(5)));
+        }
+        assert!(gate.update(Attention::Phone, seconds(11), seconds(5)));
+        for n in 12..20 {
+            assert!(gate.update(Attention::Unknown, seconds(n), seconds(5)));
+        }
+        assert!(!gate.update(Attention::Working(0), seconds(20), seconds(5)));
+    }
+    #[test]
+    fn stale_frames_and_reset_cancel_an_active_loop() {
+        let mut gate = AlertGate::default();
+        for n in 0..=5 {
+            gate.update(Attention::Distracted, seconds(n), seconds(5));
+        }
+        assert!(gate.active());
+        assert!(!gate.update(Attention::Unknown, seconds(20), seconds(5)));
+        for n in 21..=26 {
+            gate.update(Attention::Phone, seconds(n), seconds(5));
+        }
+        assert!(gate.active());
         gate.reset();
-        assert_eq!(gate.progress(seconds(50), seconds(5)), 0.);
+        assert!(!gate.active());
+        assert_eq!(gate.progress(seconds(26), seconds(5)), 0.);
     }
 }

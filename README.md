@@ -41,7 +41,9 @@ request sudo. Building and running directly does not install anything system-wid
    other FFmpeg-supported sound and press
    **Test**. The default is a short generated chime. Playback does not overlap.
 5. Adjust the alert delay (default six seconds) and position tolerance.
-   Higher tolerance allows more movement. Alerts have a 25-second cooldown.
+   Higher tolerance allows more movement. After the delay, your sound loops
+   continuously until you return to either monitor or an enabled, calibrated
+   notebook position. Each new distraction starts a fresh delay; there is no cooldown.
 6. Press **Hide to tray** or close the window to keep monitoring without a
    tiled window. Click the tray icon or open Focus Buddy from Apps to return.
    Hover over the tray icon to see the current status and notebook mode.
@@ -67,10 +69,11 @@ confirm scrolling, or measure mental focus. The phone setting is a calibrated
 look position, not an object detector. You can still browse distractions on a
 monitor without triggering an alert.
 
-Missing faces, multiple faces, closed/poorly visible eyes, ambiguous positions,
-and stale frames reset the alert timer. This prevents many false alarms, but
-also means turning fully away or leaving the desk can go unalerted. This
-version deliberately stays quiet when it cannot tell. Glasses, reflections,
+Missing faces, multiple faces, closed/poorly visible eyes, and ambiguous
+positions reset the initial alert timer. Once an alert is sounding, uncertain
+readings keep it looping until a working position is recognized. Stale camera
+frames, camera errors, Pause, calibration, and changes to detection settings
+stop the loop. Turning fully away before the first alert can still go unalerted. Glasses, reflections,
 dim light, and overlapping phone/notebook positions can limit accuracy.
 Live desk accuracy has not yet been measured.
 
